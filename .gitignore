@@ -44,3 +44,4 @@ issues.md
 target/
 **/*.rs.bk
 Cargo.lock
+contract/**/test_snapshots/
