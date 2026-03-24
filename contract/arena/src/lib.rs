@@ -181,6 +181,17 @@ impl ArenaContract {
             .expect("not initialized")
     }
 
+    /// Set a new admin address. Only the current admin can call this.
+    pub fn set_admin(env: Env, new_admin: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN_KEY)
+            .expect("not initialized");
+        admin.require_auth();
+        env.storage().instance().set(&ADMIN_KEY, &new_admin);
+    }
+
     /// Pause the contract. Admin-only.
     pub fn pause(env: Env) {
         let admin = Self::admin(env.clone());
