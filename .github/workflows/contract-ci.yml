@@ -19,8 +19,6 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
 
       - name: Add wasm32 target
         run: rustup target add wasm32-unknown-unknown
@@ -36,13 +34,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      - name: Build contracts
-        working-directory: ./contract
-        run: cargo build --workspace
-
       - name: Run contract tests
         working-directory: ./contract
         run: cargo test --workspace
+
+      - name: Install Soroban CLI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev libudev-dev libusb-1.0-0-dev
 
       - name: Install Soroban CLI
         run: cargo install --locked soroban-cli

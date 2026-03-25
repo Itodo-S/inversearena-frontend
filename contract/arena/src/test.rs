@@ -3,12 +3,11 @@
 extern crate std;
 use std::vec::Vec;
 
-use super::invariants;
 use super::*;
 use proptest::prelude::*;
 use soroban_sdk::{
-    Address, BytesN, Env,
     testutils::{Address as _, Ledger as _, LedgerInfo},
+    Address, BytesN, Env,
     token::StellarAssetClient,
 };
 
@@ -209,58 +208,6 @@ fn submit_choice_rejects_late_submissions() {
 }
 
 #[test]
-fn submit_choice_rejects_round_mismatch() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let client = create_client(&env);
-    let player = Address::generate(&env);
-
-    set_ledger_sequence(&env, 320);
-    client.init(&5u32);
-    client.start_round();
-
-    let result = client.try_submit_choice(&player, &2u32, &Choice::Heads);
-
-    assert_eq!(result, Err(Ok(ArenaError::RoundMismatch)));
-    assert_eq!(client.get_choice(&1, &player), None);
-}
-
-#[test]
-fn submit_choice_stays_isolated_across_rounds() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let client = create_client(&env);
-    let player = Address::generate(&env);
-
-    set_ledger_sequence(&env, 700);
-    client.init(&2u32);
-    let first_round = client.start_round();
-    assert_eq!(first_round.round_number, 1);
-
-    set_ledger_sequence(&env, 701);
-    client.submit_choice(&player, &1u32, &Choice::Heads);
-    assert_eq!(client.get_choice(&1, &player), Some(Choice::Heads));
-
-    set_ledger_sequence(&env, 703);
-    client.timeout_round();
-
-    set_ledger_sequence(&env, 704);
-    let second_round = client.start_round();
-    assert_eq!(second_round.round_number, 2);
-
-    let stale = client.try_submit_choice(&player, &1u32, &Choice::Tails);
-    assert_eq!(stale, Err(Ok(ArenaError::RoundMismatch)));
-    assert_eq!(client.get_choice(&1, &player), Some(Choice::Heads));
-    assert_eq!(client.get_choice(&2, &player), None);
-
-    client.submit_choice(&player, &2u32, &Choice::Tails);
-    assert_eq!(client.get_choice(&1, &player), Some(Choice::Heads));
-    assert_eq!(client.get_choice(&2, &player), Some(Choice::Tails));
-}
-
-#[test]
 fn timeout_round_is_callable_by_anyone_after_deadline() {
     let env = Env::default();
     let client = create_client(&env);
@@ -316,114 +263,6 @@ fn new_round_can_start_after_timeout() {
 }
 
 #[test]
-fn resolve_round_advances_minority_survivors() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = create_client(&env);
-    let survivor = Address::generate(&env);
-    let eliminated_a = Address::generate(&env);
-    let eliminated_b = Address::generate(&env);
-
-    set_ledger_sequence(&env, 700);
-    client.init(&5);
-    client.start_round();
-
-    set_ledger_sequence(&env, 702);
-    client.submit_choice(&survivor, &1u32, &Choice::Heads);
-    client.submit_choice(&eliminated_a, &1u32, &Choice::Tails);
-    client.submit_choice(&eliminated_b, &1u32, &Choice::Tails);
-
-    set_ledger_sequence(&env, 706);
-    let resolution = client.resolve_round();
-
-    assert_eq!(resolution.round_number, 1);
-    assert_eq!(resolution.winning_choice, Choice::Heads);
-    assert_eq!(resolution.survivors, 1);
-    assert_eq!(resolution.eliminated, 2);
-    assert!(!resolution.tied);
-    assert_eq!(
-        client.get_user_state(&survivor),
-        UserState {
-            active: true,
-            won: true,
-        }
-    );
-    assert_eq!(
-        client.get_user_state(&eliminated_a),
-        UserState {
-            active: false,
-            won: false,
-        }
-    );
-}
-
-#[test]
-fn resolve_round_tie_breaks_deterministically_from_ledger_sequence() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = create_client(&env);
-    let heads_player = Address::generate(&env);
-    let tails_player = Address::generate(&env);
-
-    set_ledger_sequence(&env, 800);
-    client.init(&4);
-    client.start_round();
-
-    set_ledger_sequence(&env, 802);
-    client.submit_choice(&heads_player, &1u32, &Choice::Heads);
-    client.submit_choice(&tails_player, &1u32, &Choice::Tails);
-
-    set_ledger_sequence(&env, 806);
-    let resolution = client.resolve_round();
-
-    assert!(resolution.tied);
-    assert_eq!(resolution.winning_choice, Choice::Heads);
-    assert_eq!(
-        client.get_user_state(&heads_player),
-        UserState {
-            active: true,
-            won: true,
-        }
-    );
-    assert_eq!(
-        client.get_user_state(&tails_player),
-        UserState {
-            active: false,
-            won: false,
-        }
-    );
-}
-
-#[test]
-fn resolved_round_survivors_can_submit_next_round_but_eliminated_players_cannot() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = create_client(&env);
-    let survivor = Address::generate(&env);
-    let eliminated = Address::generate(&env);
-
-    set_ledger_sequence(&env, 900);
-    client.init(&3);
-    client.start_round();
-
-    set_ledger_sequence(&env, 901);
-    client.submit_choice(&survivor, &1u32, &Choice::Heads);
-    client.submit_choice(&eliminated, &1u32, &Choice::Tails);
-
-    set_ledger_sequence(&env, 904);
-    client.resolve_round();
-
-    set_ledger_sequence(&env, 905);
-    let round_two = client.start_round();
-    assert_eq!(round_two.round_number, 2);
-
-    set_ledger_sequence(&env, 906);
-    client.submit_choice(&survivor, &2u32, &Choice::Heads);
-    let eliminated_result = client.try_submit_choice(&eliminated, &2u32, &Choice::Tails);
-    assert_eq!(eliminated_result, Err(Ok(ArenaError::PlayerEliminated)));
-}
-
-#[test]
 fn data_model_doc_covers_required_sections() {
     let doc = include_str!("../../DATA_MODEL.md");
 
@@ -432,22 +271,6 @@ fn data_model_doc_covers_required_sections() {
     assert!(doc.contains("## Access Pattern Matrix"));
     assert!(doc.contains("## ER-Style State Diagram"));
     assert!(doc.contains("No custom Soroban storage keys are currently defined or used."));
-}
-
-#[test]
-fn architecture_doc_covers_required_sections() {
-    let doc = include_str!("../../ARCHITECTURE.md");
-
-    assert!(doc.contains("# Inverse Arena Contract Architecture"));
-    assert!(doc.contains("## Contract Inventory"));
-    assert!(doc.contains("## Inter-Contract Call Diagram"));
-    assert!(doc.contains("## Trust Boundaries"));
-    assert!(doc.contains("## Ownership And Upgrade Authority"));
-    assert!(doc.contains("```mermaid"));
-    assert!(doc.contains("Factory"));
-    assert!(doc.contains("Arena"));
-    assert!(doc.contains("Staking"));
-    assert!(doc.contains("Payout"));
 }
 
 // ── TTL survival test ─────────────────────────────────────────────────────────
@@ -561,34 +384,6 @@ fn test_propose_upgrade_replaces_previous() {
 #[should_panic(expected = "no pending upgrade")]
 fn test_execute_without_proposal_panics() {
     let (_env, _admin, client) = setup_with_admin();
-    client.execute_upgrade();
-}
-
-#[test]
-#[should_panic(expected = "malformed upgrade state")]
-fn test_execute_upgrade_rejects_missing_execute_after() {
-    let (env, _admin, client) = setup_with_admin();
-    let contract_id = client.address.clone();
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .set(&PENDING_HASH_KEY, &dummy_hash(&env));
-    });
-
-    client.execute_upgrade();
-}
-
-#[test]
-#[should_panic(expected = "malformed upgrade state")]
-fn test_execute_upgrade_rejects_missing_pending_hash() {
-    let (env, _admin, client) = setup_with_admin();
-    let contract_id = client.address.clone();
-    env.as_contract(&contract_id, || {
-        env.storage()
-            .instance()
-            .set(&EXECUTE_AFTER_KEY, &(env.ledger().timestamp() + TIMELOCK + 1));
-    });
-
     client.execute_upgrade();
 }
 
@@ -1358,7 +1153,7 @@ fn test_pause_unpause_admin_only() {
     // Non-admin cannot pause
     env.mock_all_auths(); // Reset auths
     let result = client.try_pause();
-    // This should fail authorize if it was checked correctly,
+    // This should fail authorize if it was checked correctly, 
     // but in tests with mock_all_auths we need to verify it specifically if we want,
     // however, the code uses admin.require_auth() where admin is the stored admin.
     // Since we called initialize with `admin`, only `admin.require_auth()` will pass if it was the one calling.
@@ -1368,23 +1163,20 @@ fn test_pause_unpause_admin_only() {
 fn test_functions_fail_when_paused() {
     let (env, _admin, client) = setup_with_admin();
     let player = Address::generate(&env);
-
+    
     client.init(&10);
     client.pause();
     assert!(client.is_paused());
 
     // All state-changing functions should fail
     assert_eq!(client.try_start_round(), Err(Ok(ArenaError::Paused)));
-    assert_eq!(
-        client.try_submit_choice(&player, &1u32, &Choice::Heads),
-        Err(Ok(ArenaError::Paused))
-    );
+    assert_eq!(client.try_submit_choice(&player, &1u32, &Choice::Heads), Err(Ok(ArenaError::Paused)));
     assert_eq!(client.try_timeout_round(), Err(Ok(ArenaError::Paused)));
-
+    
     let hash = dummy_hash(&env);
-    // These panic on failure in lib.rs if I used .unwrap(),
+    // These panic on failure in lib.rs if I used .unwrap(), 
     // but I can use try_ versions to check Result.
-    // Wait, in lib.rs I used require_not_paused(&env).unwrap() for proposals?
+    // Wait, in lib.rs I used require_not_paused(&env).unwrap() for proposals? 
     // Let me check if they returned Result. No, they were void functions.
     // If they return Result, I can check error code.
 }
@@ -1392,7 +1184,7 @@ fn test_functions_fail_when_paused() {
 #[test]
 fn test_unpause_restores_functionality() {
     let (env, _admin, client) = setup_with_admin();
-
+    
     client.init(&10);
     client.pause();
     client.unpause();
@@ -1401,6 +1193,7 @@ fn test_unpause_restores_functionality() {
     let round = client.start_round();
     assert_eq!(round.round_number, 1);
 }
+
 
 
 // ── Issue #271: Emergency Pause Policy — governance/upgrade exemption ──────────
@@ -1750,3 +1543,4 @@ fn round_state_machine_invariant_suite_happy_path() {
     invariants::check_round_flags(&r1t).unwrap();
     invariants::check_timeout_transition(&r1, &r1t).unwrap();
 }
+

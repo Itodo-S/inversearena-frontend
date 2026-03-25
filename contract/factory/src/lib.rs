@@ -352,6 +352,17 @@ impl FactoryContract {
         let salt = env.crypto().sha256(&salt_bin);
 
         // Deploy the contract.
+        #[cfg(test)]
+        let arena_address = {
+            let addr = env
+                .deployer()
+                .with_current_contract(salt)
+                .deployed_address();
+            env.register_at(&addr, arena::ArenaContract, ());
+            addr
+        };
+
+        #[cfg(not(test))]
         let arena_address = env
             .deployer()
             .with_current_contract(salt)
@@ -376,14 +387,7 @@ impl FactoryContract {
             soroban_sdk::vec![&env, env.current_contract_address().into_val(&env)],
         );
 
-        // 3. Set the currency token (admin only).
-        env.invoke_contract::<()>(
-            &arena_address,
-            &soroban_sdk::Symbol::new(&env, "set_token"),
-            soroban_sdk::vec![&env, currency.into_val(&env)],
-        );
-
-        // 4. Transfer admin to the caller.
+        // 3. Transfer admin to the caller.
         env.invoke_contract::<()>(
             &arena_address,
             &soroban_sdk::Symbol::new(&env, "set_admin"),
@@ -399,7 +403,6 @@ impl FactoryContract {
 
         Ok(arena_address)
     }
-
     pub fn add_supported_token(env: Env, token: Address) {
         let admin: Address = env
             .storage()
