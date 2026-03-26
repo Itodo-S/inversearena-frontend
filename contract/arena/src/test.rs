@@ -1765,3 +1765,60 @@ fn submit_choice_wrong_round_returns_wrong_round_number() {
     let result = client.try_submit_choice(&player, &99u32, &Choice::Heads);
     assert_eq!(result, Err(Ok(ArenaError::WrongRoundNumber)));
 }
+
+// ── get_user_state ───────────────────────────────────────────────────────────
+
+#[test]
+fn get_user_state_non_existent_player_returns_inactive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let unknown = Address::generate(&env);
+    let state = client.get_user_state(&unknown);
+    assert_eq!(state.is_active, false);
+    assert_eq!(state.has_won, false);
+}
+
+#[test]
+fn get_user_state_active_player_shows_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let player = Address::generate(&env);
+    client.join(&player, &10i128);
+
+    let state = client.get_user_state(&player);
+    assert_eq!(state.is_active, true);
+    assert_eq!(state.has_won, false);
+}
+
+#[test]
+fn get_user_state_returns_consistent_for_multiple_players() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let player_a = Address::generate(&env);
+    let player_b = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    client.join(&player_a, &10i128);
+    client.join(&player_b, &20i128);
+
+    let state_a = client.get_user_state(&player_a);
+    let state_b = client.get_user_state(&player_b);
+    let state_outsider = client.get_user_state(&outsider);
+
+    assert_eq!(state_a.is_active, true);
+    assert_eq!(state_b.is_active, true);
+    assert_eq!(state_outsider.is_active, false);
+    assert_eq!(state_outsider.has_won, false);
+}
