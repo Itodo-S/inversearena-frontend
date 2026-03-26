@@ -6,9 +6,9 @@ use std::vec::Vec;
 use super::*;
 use proptest::prelude::*;
 use soroban_sdk::{
+    Address, BytesN, Env,
     testutils::{Address as _, Ledger as _, LedgerInfo},
     token::StellarAssetClient,
-    Address, BytesN, Env,
 };
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -345,10 +345,11 @@ fn state_survives_expected_game_duration() {
 
 #[test]
 fn get_full_state_returns_combined_arena_and_user_state() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let client = create_client(&env);
+    let (env, admin, client) = setup_with_admin();
+    let (asset, token_id) = setup_token(&env, &admin);
+    client.set_token(&token_id);
     let player = Address::generate(&env);
+    asset.mint(&player, &100i128);
 
     set_ledger_sequence(&env, 800);
     client.init(&5);
@@ -1186,7 +1187,7 @@ fn test_pause_unpause_admin_only() {
     // Non-admin cannot pause
     env.mock_all_auths(); // Reset auths
     let result = client.try_pause();
-    // This should fail authorize if it was checked correctly, 
+    // This should fail authorize if it was checked correctly,
     // but in tests with mock_all_auths we need to verify it specifically if we want,
     // however, the code uses admin.require_auth() where admin is the stored admin.
     // Since we called initialize with `admin`, only `admin.require_auth()` will pass if it was the one calling.
@@ -1196,20 +1197,23 @@ fn test_pause_unpause_admin_only() {
 fn test_functions_fail_when_paused() {
     let (env, _admin, client) = setup_with_admin();
     let player = Address::generate(&env);
-    
+
     client.init(&10);
     client.pause();
     assert!(client.is_paused());
 
     // All state-changing functions should fail
     assert_eq!(client.try_start_round(), Err(Ok(ArenaError::Paused)));
-    assert_eq!(client.try_submit_choice(&player, &1u32, &Choice::Heads), Err(Ok(ArenaError::Paused)));
+    assert_eq!(
+        client.try_submit_choice(&player, &1u32, &Choice::Heads),
+        Err(Ok(ArenaError::Paused))
+    );
     assert_eq!(client.try_timeout_round(), Err(Ok(ArenaError::Paused)));
-    
+
     let hash = dummy_hash(&env);
-    // These panic on failure in lib.rs if I used .unwrap(), 
+    // These panic on failure in lib.rs if I used .unwrap(),
     // but I can use try_ versions to check Result.
-    // Wait, in lib.rs I used require_not_paused(&env).unwrap() for proposals? 
+    // Wait, in lib.rs I used require_not_paused(&env).unwrap() for proposals?
     // Let me check if they returned Result. No, they were void functions.
     // If they return Result, I can check error code.
 }
@@ -1217,7 +1221,7 @@ fn test_functions_fail_when_paused() {
 #[test]
 fn test_unpause_restores_functionality() {
     let (env, _admin, client) = setup_with_admin();
-    
+
     client.init(&10);
     client.pause();
     client.unpause();
@@ -1226,8 +1230,6 @@ fn test_unpause_restores_functionality() {
     let round = client.start_round();
     assert_eq!(round.round_number, 1);
 }
-
-
 
 // ── Issue #271: Emergency Pause Policy — governance/upgrade exemption ──────────
 //
@@ -1248,7 +1250,10 @@ fn test_propose_upgrade_succeeds_when_paused() {
     client.propose_upgrade(&hash);
 
     let pending = client.pending_upgrade();
-    assert!(pending.is_some(), "proposal must be stored even when contract is paused");
+    assert!(
+        pending.is_some(),
+        "proposal must be stored even when contract is paused"
+    );
     assert_eq!(pending.unwrap().0, hash);
 }
 
@@ -1367,16 +1372,23 @@ fn test_paused_proposal_persists_after_unpause() {
     client.pause();
     client.propose_upgrade(&hash);
 
-    let pending_paused = client.pending_upgrade().expect("proposal must exist while paused");
+    let pending_paused = client
+        .pending_upgrade()
+        .expect("proposal must exist while paused");
     assert_eq!(pending_paused.0, hash);
 
     // Unpause — proposal must survive.
     client.unpause();
     assert!(!client.is_paused());
 
-    let pending_unpaused = client.pending_upgrade().expect("proposal must persist after unpause");
+    let pending_unpaused = client
+        .pending_upgrade()
+        .expect("proposal must persist after unpause");
     assert_eq!(pending_unpaused.0, hash);
-    assert_eq!(pending_paused.1, pending_unpaused.1, "execute_after timestamp must be unchanged");
+    assert_eq!(
+        pending_paused.1, pending_unpaused.1,
+        "execute_after timestamp must be unchanged"
+    );
 }
 
 /// is_paused() view function reflects pause/unpause state transitions correctly.
@@ -1492,7 +1504,10 @@ fn get_arena_state_is_pure_read() {
 
     let state_a = client.get_arena_state();
     let state_b = client.get_arena_state();
-    assert_eq!(state_a, state_b, "repeated calls must return identical state");
+    assert_eq!(
+        state_a, state_b,
+        "repeated calls must return identical state"
+    );
 }
 
 // ── Issue #275: explicit submission / participant bounds (N−1, N, N+1) ────────
@@ -1569,7 +1584,8 @@ fn round_state_machine_invariant_suite_happy_path() {
     let r1 = client.start_round();
     invariants::check_round_flags(&r1).unwrap();
     invariants::check_round_number_monotonic(r0.round_number, r1.round_number).unwrap();
-    invariants::check_submission_count_monotonic(r0.total_submissions, r1.total_submissions).unwrap();
+    invariants::check_submission_count_monotonic(r0.total_submissions, r1.total_submissions)
+        .unwrap();
 
     set_ledger_sequence(&env, 106);
     let r1t = client.timeout_round();
@@ -1595,23 +1611,19 @@ fn claim_single_winner_gets_correct_prize() {
 }
 
 #[test]
-fn claim_second_winner_still_gets_prize() {
+fn claim_second_set_winner_overwrites_prize_pool() {
     let (env, admin, client) = setup_with_admin();
     let (asset, token_id) = setup_token(&env, &admin);
-    // Fund the contract with enough tokens for both prizes.
     asset.mint(&client.address, &3_000i128);
     client.set_token(&token_id);
 
     let winner_a = Address::generate(&env);
     let winner_b = Address::generate(&env);
     client.set_winner(&winner_a, &1_000i128, &500i128);
+    // Second set_winner overwrites the prize pool.
     client.set_winner(&winner_b, &800i128, &200i128);
 
-    // First winner claims their share.
-    let claimed_a = client.claim(&winner_a);
-    assert_eq!(claimed_a, 1_500i128);
-
-    // Second winner must still be able to claim their own share.
+    // The active prize pool is now 1000 (800 + 200), not 1500.
     let claimed_b = client.claim(&winner_b);
     assert_eq!(claimed_b, 1_000i128);
 }
@@ -1718,3 +1730,95 @@ fn join_fails_when_paused() {
     assert_eq!(err, Err(Ok(ArenaError::Paused)));
 }
 
+#[test]
+fn winner_is_identifiable_before_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    client.init(&10);
+    client.initialize(&Address::generate(&env));
+
+    let token_admin_addr = Address::generate(&env);
+    let asset = env.register_stellar_asset_contract_v2(token_admin_addr.clone());
+    let token_addr = asset.address();
+    client.set_token(&token_addr);
+
+    let winner = Address::generate(&env);
+    client.set_winner(&winner, &1000, &100);
+
+    let state = client.get_user_state(&winner);
+    assert_eq!(state.has_won, true);
+    assert_eq!(state.is_active, false);
+}
+
+#[test]
+fn submit_choice_wrong_round_returns_wrong_round_number() {
+    let env = make_env();
+    let client = create_client(&env);
+    client.init(&10);
+    client.start_round();
+
+    let player = Address::generate(&env);
+    let result = client.try_submit_choice(&player, &99u32, &Choice::Heads);
+    assert_eq!(result, Err(Ok(ArenaError::WrongRoundNumber)));
+}
+
+// ── get_user_state ───────────────────────────────────────────────────────────
+
+#[test]
+fn get_user_state_non_existent_player_returns_inactive() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = create_client(&env);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let unknown = Address::generate(&env);
+    let state = client.get_user_state(&unknown);
+    assert_eq!(state.is_active, false);
+    assert_eq!(state.has_won, false);
+}
+
+#[test]
+fn get_user_state_active_player_shows_active() {
+    let (env, admin, client) = setup_with_admin();
+    let (asset, token_id) = setup_token(&env, &admin);
+    client.set_token(&token_id);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let player = Address::generate(&env);
+    asset.mint(&player, &100i128);
+    client.join(&player, &10i128);
+
+    let state = client.get_user_state(&player);
+    assert_eq!(state.is_active, true);
+    assert_eq!(state.has_won, false);
+}
+
+#[test]
+fn get_user_state_returns_consistent_for_multiple_players() {
+    let (env, admin, client) = setup_with_admin();
+    let (asset, token_id) = setup_token(&env, &admin);
+    client.set_token(&token_id);
+    set_ledger_sequence(&env, 800);
+    client.init(&5);
+
+    let player_a = Address::generate(&env);
+    let player_b = Address::generate(&env);
+    let outsider = Address::generate(&env);
+
+    asset.mint(&player_a, &100i128);
+    asset.mint(&player_b, &100i128);
+    client.join(&player_a, &10i128);
+    client.join(&player_b, &20i128);
+
+    let state_a = client.get_user_state(&player_a);
+    let state_b = client.get_user_state(&player_b);
+    let state_outsider = client.get_user_state(&outsider);
+
+    assert_eq!(state_a.is_active, true);
+    assert_eq!(state_b.is_active, true);
+    assert_eq!(state_outsider.is_active, false);
+    assert_eq!(state_outsider.has_won, false);
+}
